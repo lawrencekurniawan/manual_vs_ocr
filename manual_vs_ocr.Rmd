@@ -1,0 +1,350 @@
+---
+title: "manual vs ocr"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(stringr)
+library(lubridate)
+library(readxl)
+library(WRS2)
+
+folder = "/Users/lawrence.wong/Projects/Deep_Dive/competition/manual_vs_ocr/"
+
+```
+
+#partly cleaned data
+
+Load data from clean source (cleaned using BA's excel tools)
+```{r, include = FALSE}
+files = list.files(paste0(folder, "data/processed/"))
+
+get_files = function(datapath, file.index, sheet, timeformat) {
+  read_excel(paste0(folder, datapath, files[file.index]), sheet = sheet) %>%
+  rename(start_time = `Start Trip (Manual Input)`
+         , end_time = `End Trip (Manual Input)`) %>%
+  mutate(start_time = format.POSIXct(as.POSIXct(start_time, origin = "1970-01-01"), "%H:%M")
+         , end_time = format.POSIXct(as.POSIXct(end_time, origin = "1970-01-01"), "%H:%M"))
+}
+
+#sheet 1 = OCR, sheet 2 = manual
+ocr.goride = get_files(datapath = "data/processed/", file.index = 1, sheet = 1) 
+manual.goride = get_files(datapath = "data/processed/", file.index = 1, sheet = 2) %>%
+  mutate(start_time = parse_time(start_time, format = "%H.%M")
+         , start_time = format.POSIXct(as.POSIXct(start_time), "%H:%M")
+         , end_time = parse_time(end_time, format = "%H.%M")
+         , end_time = format.POSIXct(as.POSIXct(end_time), "%H:%M"))
+
+ocr.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 1) 
+manual.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 2) 
+
+ocr.grabbike = get_files(datapath = "data/processed/", file.index = 3, sheet = 1) %>%
+  dplyr::select(1:18) %>%
+  filter(!is.na(Distance)) #to remove the empty rows that come with the excel. there is no info at all in these removed rows.
+manual.grabbike = get_files(datapath = "data/processed/", file.index = 3, sheet = 2) %>%
+  dplyr::select(1:18)
+
+ocr.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 1)
+manual.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 2) 
+
+```
+
+###grabbike analysis
+```{r}
+set.seed(888)
+
+#how many matches do we get when we use driver name, date, and start time
+ocr.grabbike %>%
+  inner_join(manual.grabbike, by = c("Driver's Name", "Date", "start_time"))
+
+#which from ocr didn't have match in manual
+ocr.grabbike %>%
+  anti_join(manual.grabbike, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+#which from manual didn't have match in ocr
+manual.grabbike %>%
+  anti_join(ocr.grabbike, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+grabbike = bind_rows("OCR" = ocr.grabbike, "Manual" = manual.grabbike, .id = "source") %>%
+  filter(State == "COMPLETED")
+
+grabbike
+
+grabbike %>%
+  ggplot() +
+  geom_freqpoly(aes(x = Distance, color = source))
+
+grabbike %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = Distance, fill = source))
+
+grabbike %>%
+  ggplot() +
+  geom_freqpoly(aes(x = `Meter Fare`, color = source))
+
+grabbike %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = `Meter Fare`, fill = source))
+
+grabbike %>%
+  ggplot() +
+  geom_freqpoly(aes(x = Promo_Amount, color = source))
+
+grabbike %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = Promo_Amount, fill = source))
+
+grabbike %>%
+  ggplot() +
+  geom_bar(aes(x = Payment_Type, fill = source))
+
+grabbike %>%
+  filter(!is.na(`Driver's Name`)) %>%
+  ggplot() +
+  geom_bar(aes(x = `Driver's Name`, fill = source), position = "dodge") +
+  coord_flip()
+
+#t-test
+tt.manual.grabbike = manual.grabbike %>%
+  filter(State == "COMPLETED") #%>%
+  #arrange(desc(Distance))
+
+tt.ocr.grabbike = ocr.grabbike %>%
+  filter(State == "COMPLETED") %>%
+  sample_n(nrow(tt.manual.grabbike)) #%>%
+  #arrange(desc(Distance))
+
+tt.grabbike = bind_rows("OCR" = tt.ocr.grabbike, "Manual" = tt.manual.grabbike, .id = "source")
+
+two_sample_comparison = function(dv, iv, data) {
+  formula = formula(paste(dv, "~", iv))
+  tt = t.test(formula = formula, data = data, paired = T)
+  yuen = yuen(formula = formula, data = data) # robust t-test using WRS2 package
+  wlc = wilcox.test(formula = formula, data = data, paired=TRUE) #nonparametric t-test
+  return(list(tt, yuen, wlc))
+}
+
+two_sample_comparison(dv = "`Meter Fare`", iv = "source", data = tt.grabbike)
+
+#the above is equivalent to the 3 commented lines of codes below
+#t.test(`Meter Fare` ~ source, data = tt.grabbike, paired = T)
+#yuen(`Meter Fare` ~ source, data = tt.grabbike) # robust t-test using WRS2 package
+#wilcox.test(`Meter Fare` ~ source, data = tt.grabbike, paired=TRUE)
+
+two_sample_comparison(dv = "Distance", iv = "source", data = tt.grabbike)
+#two_sample_comparison(dv = "Promo_Amount", iv = "source", data = tt.grabbike)
+
+
+
+```
+
+#very raw data
+
+load data
+```{r load, include = FALSE, eval = FALSE}
+manual.files = list.files(paste0(folder, "data/"))
+ocr.files = list.files(paste0(folder, "data/OCR SAMPLE OUTPUT/"))
+
+manual.gocar = read_csv(paste0(folder, "data/", manual.files[1]))
+manual.goride = read_csv(paste0(folder, "data/", manual.files[2]))
+manual.grabbike = read_csv(paste0(folder, "data/", manual.files[3])) %>%
+  select(1:39)
+manual.grabcar = read_csv(paste0(folder, "data/", manual.files[4])) %>%
+  select(1:39)
+
+ocr.gocar.order = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[3]))
+ocr.gocar.transaksi = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[4]))
+ocr.goride.order = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[5]))
+ocr.goride.transaksi = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[6]))
+ocr.grabbike = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[1]))
+ocr.grabcar = read_csv(paste0(folder, "data/OCR SAMPLE OUTPUT/", ocr.files[2]))
+
+```
+
+```{r, eval = FALSE}
+get_day = function(x) {
+  nest = str_split(as.character(x), " ")
+}
+
+ocr.gocar.synth = ocr.gocar.transaksi %>%
+  mutate(day = sapply(str_split(waktu, " "), function(x) { x[1]})
+         , month = sapply(str_split(waktu, " "), function(x) { x[2]})
+         , time = hm(str_extract(sapply(str_split(waktu, " "), function(x) { x[3]}), "[0-9]{2}:[0-9]{2}"))
+         , synth_id = str_c(day, time, driver_name)) %>%
+  select(synth_id, waktu, day, month, time, everything())
+
+ocr.gocar.synth %>%
+  arrange(synth_id)
+
+manual.gocar.synth = manual.gocar %>%
+  mutate(day = as.character(day(Date))
+         , day = if_else(str_length(day) == 1, str_c("0", day), day)
+         , time = as.character(format(round(`End Trip (Manual Input)`, 2), nsmall = 2))
+         #, start_hour = str_extract(time, "[0-9]+.")
+         #, start_minute = str_extract(time, ".[0-9]+$")
+         , end_hour = as.character(floor(`End Trip (Manual Input)`))
+         , end_hour = if_else(str_length(end_hour) == 1, str_c("0", end_hour), end_hour)
+         , end_minute = format(round((`End Trip (Manual Input)` %% 1),3), nsmall = 2)
+         , end_minute = str_extract(as.character(end_minute), "[0-9]{2}$")
+         , end_time = str_c(end_hour, end_minute, sep = ":") #str_extract(as.character(`Start Trip (Manual Input)` %% 1), "[0-9]{2}$")  #sapply(str_split(time, "."), function(x) {x[5]})
+         #, start_time = if_else(str_length(`Start Trip (Manual Input)`) == 4, 
+          #                      str_c("0", as.character(`Start Trip (Manual Input)`)), 
+          #                      as.character(`Start Trip (Manual Input)`))
+         , synth_id = str_c(day, end_time, `Driver's Name`)
+         , end_time = parse_time(end_time, "%H:%M")) %>%
+  filter(!is.na(synth_id)) %>%
+  select(synth_id, time, end_hour, end_minute, end_time,  everything())
+
+manual.gocar.synth %>%
+  arrange(synth_id)
+
+ocr.gocar.synth %>%
+  inner_join(manual.gocar.synth, by = c("synth_id")) %>%
+  arrange(synth_id)
+  
+
+```
+
+```{r, eval = FALSE}
+a = str_split(ocr.gocar.transaksi$waktu[[1]], " ")[[1]][[3]]
+str_extract(str_split(ocr.gocar.transaksi$waktu, " ")[[1]][[3]], "[0-9]{2}:[0-9]{2}")
+```
+
+DATA VISUALISATION
+```{r, eval = FALSE}
+ocr.gocar.synth
+
+manual.gocar.synth
+```
+penambahan = meter fare
+'total saldo akhir' is not used
+
+```{r, eval = FALSE}
+ocr.selected = ocr.gocar.synth %>%
+  dplyr::select(synth_id, day, month, time, penambahan, jenis_transaksi, driver_name, total_saldo_akhir)
+
+manual.selected = manual.gocar.synth #%>%
+  #dplyr::select(synth_id, end_time, Date, `Meter Fare`)
+  
+```
+
+```{r, eval = FALSE}
+ocr.gocar.order.for_conversion = ocr.gocar.order %>%
+  mutate(jenis_transaksi = NA
+         , penambahan = NA) %>%
+  dplyr::select(status, version, nomor_referensi, breadcrumbs, destination, filename, driver_name, pickup, waktu, jenis_transaksi, penambahan)
+
+ocr.gocar.transaksi.for_conversion = ocr.gocar.transaksi %>%
+  mutate(status = NA
+         , destination = NA
+         , filename = NA
+         , pickup = NA) %>%
+  dplyr::select(status, version, nomor_referensi, breadcrumbs, destination, filename, driver_name, pickup, waktu, jenis_transaksi, penambahan)
+
+#time reference
+month_form1 = "november"
+
+ocr.gocar.bound = bind_rows(list(order = ocr.gocar.order.for_conversion, transaksi = ocr.gocar.transaksi.for_conversion), .id = "source") %>%
+  mutate(day = sapply(str_split(waktu, " "), function(x) { x[1]})
+         , month = sapply(str_split(waktu, " "), function(x) { x[2]})
+         , time = str_extract(sapply(str_split(waktu, " "), function(x) { x[3]}), "[0-9]{2}:[0-9]{2}")
+         , time2 = parse_time(time, "%H:%M")
+         , is_numeric_time = is.numeric(hour(time2))) %>%
+  arrange(driver_name, month, day, time2) %>%
+  mutate(wrong_date = if_else(month == month_form1, 
+                                if_else(is.numeric(hour(time2)) | (minute(time2) %in% c(71, 72)), F, T), #based on some physical observations, sometimes we also have wrongly read data as 'HH:71' or 'HH:72'
+                                T)
+         , is_double = if_else((nomor_referensi == lag(nomor_referensi) &
+                                  driver_name == lag(driver_name) &
+                                  time == lag(time) &
+                                  penambahan == lag(penambahan)), TRUE, F))
+
+
+ocr.gocar.bound
+
+```
+
+```{r, eval = FALSE}
+ocr.gocar.bound %>%
+  ggplot() +
+  geom_histogram(aes(x = time2))
+
+manual.gocar.synth %>%
+  ggplot() +
+  geom_histogram(aes(x = end_time))
+```
+
+#GRABBIKE
+
+OCR:
+total harga = Meter fare in manual
+promo = promo amount in manual
+
+```{r, eval = FALSE}
+
+manual.grabbike.clean = manual.grabbike %>%
+  mutate(start_time = parse_time(`Star Trip (Manual Input)`, "%H.%M")) %>%
+  filter(!is.na(Driver_Number)) %>% #driver_number = driver_name
+  dplyr::select(`Star Trip (Manual Input)`, start_time, everything())
+
+manual.grabbike.clean
+
+ocr.grabbike.clean = ocr.grabbike %>%
+  mutate(date_time = str_split(waktu, ",")
+         , date = sapply(date_time, function(x) {str_to_title(x[1])}) %>% #to title for parse_date
+                      parse_date("%d %b %Y")
+         , time = sapply(date_time, function(x) {str_to_upper(x[2])}) %>% #to upper for parse_time
+                      parse_time("%H.%M %p")
+         ) %>%
+  dplyr::select(date, time, waktu, everything()) %>%
+  filter(!is.na(driver_name))
+
+ocr.grabbike.clean
+
+joined.grabbike = ocr.grabbike.clean %>%
+  inner_join(manual.grabbike.clean, by = c("time" = "start_time", "date" = "Date", "driver_name" = "Driver_Number"))
+
+joined.grabbike
+```
+distance
+```{r, eval = FALSE}
+ggplot() +
+  geom_freqpoly(aes(x = jarak), data = (ocr.grabbike.clean %>% filter(jarak < 100)), color = "red", alpha = 0.5) +
+  geom_freqpoly(aes(x = Distance), data = manual.grabbike.clean, color = "blue", alpha = 0.5)
+
+```
+fare
+```{r, eval = FALSE}
+options(scipen = 99)
+
+ggplot() +
+  geom_freqpoly(aes(x = total_harga), data = (ocr.grabbike.clean %>% filter(total_harga < 500000)), color = "red", alpha = 0.5) +
+  geom_freqpoly(aes(x = `Meter Fare`), data = manual.grabbike.clean, color = "blue", alpha = 0.5)
+
+```
+
+promo
+```{r, eval = FALSE}
+ggplot() +
+  geom_freqpoly(aes(x = abs(promo)), data = ocr.grabbike.clean, color = "red", alpha = 0.5) +
+  geom_freqpoly(aes(x = abs(Promo_Amount)), data = manual.grabbike.clean, color = "blue", alpha = 0.5)
+
+```
+
+
+
+```{r, eval = FALSE}
+ocr.grabbike.clean %>%
+  filter(total_harga >= 50000)
+```
+
+
+```{r, eval = FALSE}
+sort(names(manual.grabbike))
+sort(names(ocr.grabbike))
+```
+
+
