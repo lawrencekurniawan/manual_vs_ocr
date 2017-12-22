@@ -22,41 +22,96 @@ files = list.files(paste0(folder, "data/processed/"))
 
 get_files = function(datapath, file.index, sheet, timeformat) {
   read_excel(paste0(folder, datapath, files[file.index]), sheet = sheet) %>%
-  rename(start_time = `Start Trip (Manual Input)`
-         , end_time = `End Trip (Manual Input)`) %>%
-  mutate(start_time = format.POSIXct(as.POSIXct(start_time, origin = "1970-01-01"), "%H:%M")
-         , end_time = format.POSIXct(as.POSIXct(end_time, origin = "1970-01-01"), "%H:%M"))
+  mutate(start_time = `Start Trip (Manual Input)`
+         , end_time = `End Trip (Manual Input)`
+         , start_time = format.POSIXct(as.POSIXct(start_time, origin = "1970-01-01"), "%H:%M")
+         , end_time = format.POSIXct(as.POSIXct(end_time, origin = "1970-01-01"), "%H:%M")
+         , start_hour = hour(lubridate::hm(start_time))
+         , start_minute = minute(lubridate::hm(start_time))
+         , end_hour = hour(lubridate::hm(end_time))
+         , end_minute = minute(lubridate::hm(end_time)))
 }
+
+#v = read_excel(paste0(folder, datapath, files[file.index]), sheet = sheet) %>%
+#  rename(start_time = `Start Trip (Manual Input)`
+#         , end_time = `End Trip (Manual Input)`)
+
+#v %>%
+#  mutate(start_time = parse_time(start_time, format = "%H.%M")
+#         , start_time = format.POSIXct(as.POSIXct(start_time), "%H:%M"))
 
 #sheet 1 = OCR, sheet 2 = manual
 ocr.goride = get_files(datapath = "data/processed/", file.index = 1, sheet = 1) 
 manual.goride = get_files(datapath = "data/processed/", file.index = 1, sheet = 2) %>%
-  mutate(start_time = parse_time(start_time, format = "%H.%M")
+  mutate(start_time = parse_time(`Start Trip (Manual Input)`, format = "%H.%M")
          , start_time = format.POSIXct(as.POSIXct(start_time), "%H:%M")
-         , end_time = parse_time(end_time, format = "%H.%M")
-         , end_time = format.POSIXct(as.POSIXct(end_time), "%H:%M"))
+         , end_time = parse_time(`End Trip (Manual Input)`, format = "%H.%M")
+         , end_time = format.POSIXct(as.POSIXct(end_time), "%H:%M")
+         , start_hour = hour(lubridate::hm(start_time))
+         , start_minute = minute(lubridate::hm(start_time))
+         , end_hour = hour(lubridate::hm(end_time))
+         , end_minute = minute(lubridate::hm(end_time)))
 
-ocr.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 1) 
-manual.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 2) 
+ocr.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 1) %>%
+  mutate(State = str_to_upper(State))
+manual.gocar = get_files(datapath = "data/processed/", file.index = 2, sheet = 2) %>%
+  mutate(State = str_to_upper(State))
 
 ocr.grabbike = get_files(datapath = "data/processed/", file.index = 3, sheet = 1) %>%
-  dplyr::select(1:18) %>%
-  filter(!is.na(Distance)) #to remove the empty rows that come with the excel. there is no info at all in these removed rows.
-manual.grabbike = get_files(datapath = "data/processed/", file.index = 3, sheet = 2) %>%
-  dplyr::select(1:18)
+  dplyr::select(1:18, start_time, end_time, start_hour, start_minute, end_hour, end_minute) %>%
+  filter(!is.na(Distance)) %>% #to remove the empty rows that come with the excel. there is no info at all in these removed rows.
+  mutate(Payment_Type = str_to_lower(Payment_Type)
+         , Promo_Code = str_to_lower(Promo_Code)) 
 
-ocr.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 1)
-manual.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 2) 
+manual.grabbike = get_files(datapath = "data/processed/", file.index = 3, sheet = 2) %>%
+  dplyr::select(1:18, start_time, end_time, start_hour, start_minute, end_hour, end_minute) %>%
+  mutate(Date = as.POSIXct(parse_date(as.character(Date), "%Y-%d-%m"))
+         , Payment_Type = str_to_lower(Payment_Type)
+         , Promo_Code = str_to_lower(Promo_Code)) 
+
+ocr.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 1) %>%
+  mutate(Payment_Type = str_to_lower(Payment_Type)
+         , Promo_Code = str_to_lower(Promo_Code)) 
+manual.grabcar = get_files(datapath = "data/processed/", file.index = 4, sheet = 2) %>%
+  mutate(Date = as.POSIXct(parse_date(as.character(Date), "%Y-%d-%m"))
+         , Payment_Type = str_to_lower(Payment_Type)
+         , Promo_Code = str_to_lower(Promo_Code))
 
 ```
+
+##two sample analysis formula
+```{r}
+two_sample_comparison = function(dv, iv, data) {
+  formula = formula(paste(dv, "~", iv))
+  
+  dv_for_subset = str_replace_all(dv, "`", "") #"`Meter Fare`" to "Meter Fare"
+  
+  if(is.numeric(data[dv_for_subset][[1]][1])) {
+    tt = t.test(formula = formula, data = data, paired = T)
+    yuen = yuen(formula = formula, data = data) # robust t-test using WRS2 package
+    wlc = wilcox.test(formula = formula, data = data, paired=TRUE) #nonparametric t-test
+    return(list(tt, yuen, wlc))
+  } else {
+    freq_table = table(pull(data, iv), pull(data, dv_for_subset))
+    chis = chisq.test(pull(data, dv_for_subset), pull(data, iv))
+    return(list(freq_table, chis))
+  }
+  
+}
+```
+
 
 ###grabbike analysis
 ```{r}
 set.seed(888)
 
+sort(sapply(names(ocr.grabbike), function(x) { sum(is.na(ocr.grabbike[x])) }))
+sort(sapply(names(manual.grabbike), function(x) { sum(is.na(manual.grabbike[x])) }))
+
 #how many matches do we get when we use driver name, date, and start time
 ocr.grabbike %>%
-  inner_join(manual.grabbike, by = c("Driver's Name", "Date", "start_time"))
+  inner_join(manual.grabbike, by = c("Driver's Name", "Date", "start_time")) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, `Meter Fare.x`, `Meter Fare.y`, Distance.x, Distance.y, Promo_Code.x, Promo_Code.y, Promo_Amount.x, Promo_Amount.y, everything())
 
 #which from ocr didn't have match in manual
 ocr.grabbike %>%
@@ -69,7 +124,7 @@ manual.grabbike %>%
   arrange(`Driver's Name`, Date, start_time)
 
 grabbike = bind_rows("OCR" = ocr.grabbike, "Manual" = manual.grabbike, .id = "source") %>%
-  filter(State == "COMPLETED")
+  filter(State == "COMPLETED") 
 
 grabbike
 
@@ -99,13 +154,23 @@ grabbike %>%
 
 grabbike %>%
   ggplot() +
-  geom_bar(aes(x = Payment_Type, fill = source))
+  geom_bar(aes(x = Payment_Type, fill = source), position = "dodge")
 
 grabbike %>%
   filter(!is.na(`Driver's Name`)) %>%
+  count(`Driver's Name`, source) %>%
   ggplot() +
-  geom_bar(aes(x = `Driver's Name`, fill = source), position = "dodge") +
+  geom_bar(aes(x = `Driver's Name`, y = n, fill = source), position = "dodge", stat = "identity") +
   coord_flip()
+
+grabbike %>%
+  ggplot() +
+  geom_bar(aes(x = `Order Type`, fill = source), position = "dodge") +
+  facet_wrap(~ `Order Type`, scales = "free_y")
+
+grabbike %>%
+  ggplot() +
+  geom_bar(aes(x = Promo_Code, fill = source), position = "dodge")
 
 #t-test
 tt.manual.grabbike = manual.grabbike %>%
@@ -117,16 +182,9 @@ tt.ocr.grabbike = ocr.grabbike %>%
   sample_n(nrow(tt.manual.grabbike)) #%>%
   #arrange(desc(Distance))
 
-tt.grabbike = bind_rows("OCR" = tt.ocr.grabbike, "Manual" = tt.manual.grabbike, .id = "source")
+tt.grabbike = bind_rows("OCR" = tt.ocr.grabbike, "Manual" = tt.manual.grabbike, .id = "source") 
 
-two_sample_comparison = function(dv, iv, data) {
-  formula = formula(paste(dv, "~", iv))
-  tt = t.test(formula = formula, data = data, paired = T)
-  yuen = yuen(formula = formula, data = data) # robust t-test using WRS2 package
-  wlc = wilcox.test(formula = formula, data = data, paired=TRUE) #nonparametric t-test
-  return(list(tt, yuen, wlc))
-}
-
+#numerical
 two_sample_comparison(dv = "`Meter Fare`", iv = "source", data = tt.grabbike)
 
 #the above is equivalent to the 3 commented lines of codes below
@@ -135,11 +193,307 @@ two_sample_comparison(dv = "`Meter Fare`", iv = "source", data = tt.grabbike)
 #wilcox.test(`Meter Fare` ~ source, data = tt.grabbike, paired=TRUE)
 
 two_sample_comparison(dv = "Distance", iv = "source", data = tt.grabbike)
-#two_sample_comparison(dv = "Promo_Amount", iv = "source", data = tt.grabbike)
 
-
+#categorical
+two_sample_comparison(dv = "Payment_Type", iv = "source", data = tt.grabbike)
 
 ```
+
+##grabcar analysis
+```{r}
+set.seed(888)
+
+sort(sapply(names(ocr.grabcar), function(x) { sum(is.na(ocr.grabcar[x])) }))
+sort(sapply(names(manual.grabcar), function(x) { sum(is.na(manual.grabcar[x])) }))
+
+#how many matches do we get when we use driver name, date, and start time
+
+outlier.ocr.grabcar = ocr.grabcar %>%
+  filter(Distance < -10)
+
+outlier.ocr.grabcar
+
+matching.grabcar = ocr.grabcar %>%
+  filter(Distance > -10) %>%
+  inner_join(manual.grabcar, by = c("Driver's Name", "Date", "start_time")) %>%
+  mutate(meter_fare_diff = `Meter Fare.x` - `Meter Fare.y`
+         , distance_diff = Distance.x - Distance.y
+         , promo_amount_diff = Promo_Amount.x - Promo_Amount.y) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, `Meter Fare.x`, `Meter Fare.y`, Distance.x, Distance.y, Promo_Amount.x, Promo_Amount.y, everything())
+
+matching.grabcar
+
+matching.grabcar %>%
+  ggplot() +
+  geom_point(aes(y = meter_fare_diff, x = start_time))
+
+matching.grabcar %>%
+  filter(meter_fare_diff > 500 | meter_fare_diff < -500) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, `Meter Fare.x`, `Meter Fare.y`, meter_fare_diff, everything())
+
+matching.grabcar %>%
+  ggplot() +
+  geom_point(aes(y = distance_diff, x = start_time))
+
+matching.grabcar %>%
+  filter(distance_diff > 0.1 | distance_diff < -0.1) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, Distance.x, Distance.y, distance_diff, everything())
+
+matching.grabcar %>%
+  ggplot() +
+  geom_point(aes(y = promo_amount_diff, x = start_time))
+
+matching.grabcar %>%
+  filter(promo_amount_diff > 100 | promo_amount_diff < -100) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, Promo_Amount.x, Promo_Amount.y, promo_amount_diff, everything())
+
+#which from ocr didn't have match in manual
+ocr.grabcar %>%
+  anti_join(manual.grabcar, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+#which from manual didn't have match in ocr
+manual.grabcar %>%
+  anti_join(ocr.grabcar, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+grabcar = bind_rows("OCR" = ocr.grabcar, "Manual" = manual.grabcar, .id = "source") %>%
+  filter(State == "COMPLETED"
+         , Distance > -10) %>% #there is an outlier with negative distance (check in outlier.ocr.grabcar)
+  mutate(Payment_Type = str_to_lower(Payment_Type)
+         , Promo_Code = str_to_lower(Promo_Code))
+
+grabcar
+
+grabcar %>%
+  ggplot() +
+  geom_freqpoly(aes(x = Distance, color = source))
+
+grabcar %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = Distance, fill = source))
+
+grabcar %>%
+  ggplot() +
+  geom_freqpoly(aes(x = `Meter Fare`, color = source))
+
+grabcar %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = `Meter Fare`, fill = source))
+
+grabcar %>%
+  ggplot() +
+  geom_freqpoly(aes(x = Promo_Amount, color = source))
+
+grabcar %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = Promo_Amount, fill = source))
+
+grabcar %>%
+  ggplot() +
+  geom_bar(aes(x = Payment_Type, fill = source), position = "dodge")
+
+grabcar %>%
+  filter(!is.na(`Driver's Name`)) %>%
+  count(`Driver's Name`, source) %>%
+  ggplot() +
+  geom_bar(aes(x = `Driver's Name`, y = n, fill = source), position = "dodge", stat = "identity") +
+  coord_flip()
+
+grabcar %>%
+  ggplot() +
+  geom_bar(aes(x = Promo_Code, fill = source), position = "dodge")
+
+#t-test
+tt.ocr.grabcar = ocr.grabcar %>%
+  filter(State == "COMPLETED"
+         , !is.na(`Meter Fare`))  #%>%
+  #arrange(desc(Distance))
+
+tt.manual.grabcar = manual.grabcar %>%
+  filter(State == "COMPLETED") %>%
+  sample_n(nrow(tt.ocr.grabcar)) #%>%
+  #arrange(desc(Distance))
+
+tt.grabcar = bind_rows("OCR" = tt.ocr.grabcar, "Manual" = tt.manual.grabcar, .id = "source")
+
+#numerical
+two_sample_comparison(dv = "`Meter Fare`", iv = "source", data = tt.grabcar)
+
+#the above is equivalent to the 3 commented lines of codes below
+#t.test(`Meter Fare` ~ source, data = tt.grabcar, paired = T)
+#yuen(`Meter Fare` ~ source, data = tt.grabcar) # robust t-test using WRS2 package
+#wilcox.test(`Meter Fare` ~ source, data = tt.grabcar, paired=TRUE)
+
+two_sample_comparison(dv = "Distance", iv = "source", data = tt.grabcar)
+#two_sample_comparison(dv = "Promo_Amount", iv = "source", data = tt.grabcar)
+
+#categorical
+two_sample_comparison(dv = "Payment_Type", iv = "source", data = tt.grabcar)
+
+```
+
+###gocar analysis
+```{r}
+manual.gocar %>%
+  filter(is.na(start_time))
+
+#IMPUTATION
+#trip_duration_assumption = lubridate::hm("00:45")
+trip_duration_assumption = as.numeric(lubridate::hm("00:45"))
+
+manual.gocar.imputed = manual.gocar %>%
+  arrange(`Driver's Name`, Date, `Start Trip (Manual Input)`) %>%
+  mutate(#start_time = lubridate::hm(start_time)
+         #, end_time = lubridate::hm(end_time)
+         start_time = `Start Trip (Manual Input)`
+         , end_time = `End Trip (Manual Input)`
+         , start_time2 = if_else(!is.na(start_hour)
+                                 , start_time 
+                                 , if_else(State != "COMPLETED"  
+                                           & !is.na(end_hour) 
+                                           , end_time
+                                           , if_else(Day == lag(Day) 
+                                                     & `Driver's Name` == lag(`Driver's Name`)
+                                                     , if_else(State == "COMPLETED" 
+                                                               & !is.na(end_hour) 
+                                                               & !is.na(lag(end_hour)) 
+                                                               & (end_time - trip_duration_assumption) > lag(end_time)
+                                                               , end_time - trip_duration_assumption 
+                                                               , if_else(State == "COMPLETED" 
+                                                                         & !is.na(end_hour) 
+                                                                         & !is.na(lag(end_hour)) 
+                                                                         & (end_time - trip_duration_assumption) > lag(end_time)
+                                                                         , lag(end_time) 
+                                                                         , if_else(State == "COMPLETED" 
+                                                                                   & !is.na(end_hour) 
+                                                                                   & is.na(lag(end_hour))
+                                                                                   & !is.na(lag(start_hour))
+                                                                                   & (end_time - lag(start_time) < (trip_duration_assumption * 2))
+                                                                                   & lag(State) == "COMPLETED"
+                                                                                   , end_time - ((end_time - lag(start_time))/2) 
+                                                                                   #, lubridate::hm(end_time - as.period((as.duration(end_time) - as.duration(lag(start_time)))/2))
+                                                                                   , if_else((State == "COMPLETED" 
+                                                                                             & !is.na(end_hour) 
+                                                                                             & is.na(lag(end_hour))
+                                                                                             & !is.na(lag(start_hour))
+                                                                                             & (end_time - lag(start_time) < (trip_duration_assumption * 2))
+                                                                                             & lag(State) == "CANCELLED")
+                                                                                             , lag(start_time) 
+                                                                                             , end_time - trip_duration_assumption
+                                                                                             #, lubridate::hm((end_time - trip_duration_assumption), roll = T)
+                                                                                             )
+                                                                                   )
+                                                                         )
+                                                               )
+                                                     , end_time - trip_duration_assumption
+                                                     #, lubridate::hm((end_time - trip_duration_assumption), roll = T)
+                                                     )
+                                           )
+                                 )
+         ) %>%
+  dplyr::select(start_time, start_time2, end_time, start_hour, start_minute, end_hour, end_minute, everything())
+
+manual.gocar.imputed
+
+sort(sapply(names(manual.gocar), function(x) { sum(is.na(manual.gocar[x])) }))
+
+ocr.gocar %>%
+  filter(is.na(start_time))
+
+sort(sapply(names(ocr.gocar), function(x) { sum(is.na(ocr.gocar[x])) }))
+
+set.seed(888)
+
+#how many matches do we get when we use driver name, date, and start time
+
+matching.gocar = ocr.gocar %>%
+  inner_join(manual.gocar, by = c("Driver's Name", "Date", "start_time")) %>%
+  mutate(meter_fare_diff = `Meter Fare.x` - `Meter Fare.y`
+         , distance_diff = Distance.x - Distance.y) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, `Meter Fare.x`, `Meter Fare.y`, Distance.x, Distance.y, everything())
+
+matching.gocar
+
+matching.gocar %>%
+  ggplot() +
+  geom_point(aes(y = meter_fare_diff, x = start_time))
+
+matching.gocar %>%
+  filter(meter_fare_diff > 500 | meter_fare_diff < -500) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, `Meter Fare.x`, `Meter Fare.y`, meter_fare_diff, everything())
+
+matching.gocar %>%
+  ggplot() +
+  geom_point(aes(y = distance_diff, x = start_time))
+
+matching.gocar %>%
+  filter(distance_diff > 0.1 | distance_diff < -0.1) %>%
+  dplyr::select(`Driver's Name`, Date, start_time, Distance.x, Distance.y, distance_diff, everything())
+
+#which from ocr didn't have match in manual
+ocr.gocar %>%
+  anti_join(manual.gocar, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+#which from manual didn't have match in ocr
+manual.gocar %>%
+  anti_join(ocr.gocar, by = c("Driver's Name", "Date", "start_time")) %>%
+  arrange(`Driver's Name`, Date, start_time)
+
+gocar = bind_rows("OCR" = ocr.gocar, "Manual" = manual.gocar, .id = "source") %>%
+  filter(State == "COMPLETED") %>% #there is an outlier with negative distance (check in outlier.ocr.gocar)
+  mutate(Payment_Type = str_to_lower(Payment_Type))
+
+gocar
+
+gocar %>%
+  ggplot() +
+  geom_freqpoly(aes(x = `Meter Fare`, color = source))
+
+gocar %>%
+  ggplot() +
+  geom_boxplot(aes(x = source, y = `Meter Fare`, fill = source))
+
+gocar %>%
+  ggplot() +
+  geom_bar(aes(x = Payment_Type, fill = source), position = "dodge")
+
+gocar %>%
+  filter(!is.na(`Driver's Name`)) %>%
+  count(`Driver's Name`, source) %>%
+  ggplot() +
+  geom_bar(aes(x = `Driver's Name`, y = n, fill = source), position = "dodge", stat = "identity") +
+  coord_flip()
+
+#t-test
+tt.ocr.gocar = ocr.gocar %>%
+  filter(State == "COMPLETED"
+         , !is.na(`Meter Fare`))  #%>%
+  #arrange(desc(Distance))
+
+tt.manual.gocar = manual.gocar %>%
+  filter(State == "COMPLETED") %>%
+  sample_n(nrow(tt.ocr.gocar)) #%>%
+  #arrange(desc(Distance))
+
+tt.gocar = bind_rows("OCR" = tt.ocr.gocar, "Manual" = tt.manual.gocar, .id = "source")
+
+#numerical
+two_sample_comparison(dv = "`Meter Fare`", iv = "source", data = tt.gocar)
+
+#the above is equivalent to the 3 commented lines of codes below
+#t.test(`Meter Fare` ~ source, data = tt.gocar, paired = T)
+#yuen(`Meter Fare` ~ source, data = tt.gocar) # robust t-test using WRS2 package
+#wilcox.test(`Meter Fare` ~ source, data = tt.gocar, paired=TRUE)
+
+#two_sample_comparison(dv = "Promo_Amount", iv = "source", data = tt.gocar)
+
+#categorical
+two_sample_comparison(dv = "Payment_Type", iv = "source", data = tt.gocar)
+
+```
+
 
 #very raw data
 
